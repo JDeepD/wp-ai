@@ -48,6 +48,7 @@ While the Classic Editor plugin remains widely used, the AI plugin is focused on
 ## Current Features
 
 * **[Abilities Explorer](docs/experiments/abilities-explorer.md)** – Discover, inspect, test, and document all abilities registered via the WordPress Abilities API.
+* **[Command Palette AI Search](docs/experiments/command-palette-ai-search.md)** - Uses AI to suggest admin screens when the command palette (Cmd/Ctrl+K) has no results for a search.
 * **[AI Request Logging](docs/experiments/ai-request-logging.md)** – Logs AI requests for observability and debugging.
 * **[Alt Text Generation](docs/experiments/alt-text-generation.md)** - Generates descriptive alt text for images using AI vision models.
 * **[Content Verification](docs/experiments/c2pa-monitor.md)** – Detects [C2PA Content Credentials](https://c2pa.org/) in uploaded images and stores the raw manifest plus a structured record alongside the attachment.
