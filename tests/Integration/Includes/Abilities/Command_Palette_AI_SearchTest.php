@@ -96,7 +96,65 @@ class Command_Palette_AI_SearchTest extends WP_UnitTestCase {
 	 */
 	public function tearDown(): void {
 		wp_set_current_user( 0 );
+		remove_all_filters( 'wpai_command_palette_ai_search_prompt_builder' );
 		parent::tearDown();
+	}
+
+	/**
+	 * Returns the ability without the mocked choose_commands().
+	 *
+	 * @return \WordPress\AI\Abilities\Command_Palette_AI_Search\Command_Palette_AI_Search The ability.
+	 */
+	private function real_ability(): Command_Palette_AI_Search {
+		return new Command_Palette_AI_Search(
+			'ai/command-palette-ai-search',
+			array(
+				'label'       => 'Command Palette AI Search',
+				'description' => 'Finds the right admin screen for a search.',
+			)
+		);
+	}
+
+	/**
+	 * Replaces the prompt builder with a mock.
+	 *
+	 * @param string|\WP_Error $response  What generate_text() returns.
+	 * @param list<bool>       $supported What each is_supported_for_text_generation() call returns.
+	 */
+	private function mock_prompt_builder( $response, array $supported = array( true, true ) ): void {
+		$mock_builder = $this->getMockBuilder( \WP_AI_Client_Prompt_Builder::class )
+			->disableOriginalConstructor()
+			->addMethods( array( 'as_json_response', 'is_supported_for_text_generation', 'generate_text' ) )
+			->getMock();
+
+		$mock_builder->method( 'as_json_response' )
+			->willReturnSelf();
+
+		$mock_builder->method( 'is_supported_for_text_generation' )
+			->willReturnOnConsecutiveCalls( ...$supported );
+
+		$mock_builder->method( 'generate_text' )
+			->willReturn( $response );
+
+		add_filter(
+			'wpai_command_palette_ai_search_prompt_builder',
+			static function () use ( $mock_builder ) {
+				return $mock_builder;
+			}
+		);
+	}
+
+	/**
+	 * Invokes choose_commands() on the real ability.
+	 *
+	 * @return mixed The method's return value.
+	 */
+	private function choose_commands() {
+		$ability = $this->real_ability();
+		$method  = ( new \ReflectionClass( $ability ) )->getMethod( 'choose_commands' );
+		$method->setAccessible( true );
+
+		return $method->invoke( $ability, '<search>hide my site from google</search>', 4 );
 	}
 
 	/**
@@ -275,5 +333,84 @@ class Command_Palette_AI_SearchTest extends WP_UnitTestCase {
 		$this->assertSame( array( 'c0', 'c1', 'c2' ), $schema['properties']['commands']['items']['enum'] );
 		$this->assertSame( 3, $schema['properties']['commands']['maxItems'] );
 		$this->assertSame( array( 'commands' ), $schema['required'] );
+	}
+
+	/**
+	 * Test that the system instruction asks for at most three IDs.
+	 */
+	public function test_get_system_instruction_includes_max_results() {
+		$system_instruction = $this->real_ability()->get_system_instruction( null, array( 'max_results' => 3 ) );
+
+		$this->assertStringContainsString( 'Return at most 3 IDs', $system_instruction );
+	}
+
+	/**
+	 * Test that choose_commands() returns an error without a provider that supports text generation.
+	 */
+	public function test_choose_commands_returns_error_without_provider() {
+		$result = $this->choose_commands();
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'unsupported_model', $result->get_error_code() );
+	}
+
+	/**
+	 * Test that choose_commands() decodes the command IDs from the model's response.
+	 */
+	public function test_choose_commands_returns_ids() {
+		$this->mock_prompt_builder( '{"commands":["c1","c0"]}' );
+
+		$this->assertSame( array( 'c1', 'c0' ), $this->choose_commands() );
+	}
+
+	/**
+	 * Test that choose_commands() falls back to a plain prompt when structured output is not supported.
+	 */
+	public function test_choose_commands_falls_back_without_structured_output() {
+		$this->mock_prompt_builder( "Sure!\n```json\n{\"commands\":[\"c2\"]}\n```", array( false, true ) );
+
+		$this->assertSame( array( 'c2' ), $this->choose_commands() );
+	}
+
+	/**
+	 * Test that choose_commands() returns the error from the model.
+	 */
+	public function test_choose_commands_returns_generation_errors() {
+		$this->mock_prompt_builder( new WP_Error( 'provider_error', 'Provider failed.' ) );
+
+		$result = $this->choose_commands();
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'provider_error', $result->get_error_code() );
+	}
+
+	/**
+	 * Test that choose_commands() returns an error when the response is not a list of commands.
+	 *
+	 * @dataProvider data_unparseable_responses
+	 *
+	 * @param string $response The raw model response.
+	 */
+	public function test_choose_commands_returns_error_for_unparseable_response( string $response ) {
+		$this->mock_prompt_builder( $response );
+
+		$result = $this->choose_commands();
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_response', $result->get_error_code() );
+	}
+
+	/**
+	 * Data provider of model responses that cannot be parsed as command IDs.
+	 *
+	 * @return array<string, array{string}> The responses to test.
+	 */
+	public function data_unparseable_responses(): array {
+		return array(
+			'plain text'   => array( 'c1, c2' ),
+			'empty string' => array( '' ),
+			'wrong shape'  => array( '{"ids":["c1"]}' ),
+			'not a list'   => array( '{"commands":"c1"}' ),
+		);
 	}
 }
